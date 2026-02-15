@@ -1,9 +1,9 @@
 # Aion-Version-Dll
-Aion No-IP and Windows 10 camera fix.
+Aion No-IP and Windows 10/11 camera fix.
 
 Features:
 - Allows the game client to connect to non-official game server IPs (prevents the error message "No game server is available to the authorization server (6)").
-- Fixes the camera movement issue on Windows 10 (introduced by the Fall Creators Update 2017) without needing to run a separate program.
+- Fixes the camera movement issue on Windows 10/11 (introduced by the Fall Creators Update 2017) without needing to run a separate program.
 - Enables all graphics options sliders (shadows, water quality, etc) which are otherwise disabled at high resolutions.
 - [DXVK support](https://github.com/doitsujin/dxvk)
 
@@ -12,6 +12,7 @@ This project depends on [MS Detours](https://github.com/Microsoft/Detours). Sinc
 
 ## Installation
 To install, copy each version.dll to the respective bin32 or bin64 folder under the Aion client root.
+
 If you want DXVK support, put d3d9.dll to the respective bin32 or bin64 folder under the Aion client root.
 
 Note: Existing patch dlls should be removed from the bin32/bin64 directories as they may have conflicting functionality.
