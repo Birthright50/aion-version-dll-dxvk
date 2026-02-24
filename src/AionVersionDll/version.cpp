@@ -13,6 +13,12 @@ static list<char> s_gameServerIps = {};
 static bool s_gfxEnabled = false;
 HWND clientHwnd = nullptr;
 bool mouseHookInstalled = false;
+bool g_isCursorHidden = false;
+bool g_stepGetCursorPos = 0;
+bool g_isHandlingMouseDown = false;
+int rawX = 0, rawY = 0;
+int g_stepPanning = 0;
+WNDPROC g_realWndProc;
 
 template <typename T>
 bool contains(const list<T>& list, const T& element) {
@@ -45,72 +51,217 @@ bool IsCursorHidden() {
     return cursorInfo.flags == 0;
 }
 
-bool IsWindowedMode() {
-    return clientHwnd && (GetWindowLong(clientHwnd, GWL_STYLE) & WS_CAPTION);
+bool AllButtonsUp() {
+    return !(GetKeyState(VK_LBUTTON) & 0x8000) && !(GetKeyState(VK_RBUTTON) & 0x8000) && !(GetKeyState(VK_MBUTTON) & 0x8000);
 }
 
-WPARAM MakeMouseMoveWParam() {
-    return ((GetKeyState(VK_LBUTTON) & 0x8000) ? 0x0001 : 0) |
-        ((GetKeyState(VK_RBUTTON) & 0x8000) ? 0x0002 : 0) |
-        ((GetKeyState(VK_SHIFT) & 0x8000) ? 0x0004 : 0) |
-        ((GetKeyState(VK_CONTROL) & 0x8000) ? 0x0008 : 0) |
-        ((GetKeyState(VK_MBUTTON) & 0x8000) ? 0x0010 : 0) |
-        ((GetKeyState(VK_XBUTTON1) & 0x8000) ? 0x0020 : 0) |
-        ((GetKeyState(VK_XBUTTON2) & 0x8000) ? 0x0040 : 0);
-}
-
-LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode >= 0) {
-        if (IsWindowedMode()) {
-            if (wParam == WM_MOUSEMOVE && clientHwnd && IsCursorHidden()) {
-                POINT pt = ((MSLLHOOKSTRUCT*)lParam)->pt;
-                ScreenToClient(clientHwnd, &pt);
-                SendMessage(clientHwnd, WM_MOUSEMOVE, MakeMouseMoveWParam(), MAKELPARAM(pt.x, pt.y));
+HWND GetAionHwnd() {
+    if (!clientHwnd) {
+        HWND hwnd = GetActiveWindow();
+        if (hwnd) {
+            char name[64];
+            GetClassNameA(hwnd, name, 64);
+            if (!strncmp(name, "AIONClient", 10)) {
+                clientHwnd = hwnd;
             }
-        } else {
-            // we need to uninstall the hook in fullscreen mode to not send double WM_MOUSEMOVE events (makes the camera go wild)
-            PostThreadMessage(GetCurrentThreadId(), WM_QUIT, 0, 0);
         }
     }
-    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+    return clientHwnd;
+}
+int clientLeft, clientTop;
+int MakeMouseMoveWPARAM()
+{
+    return
+        (GetKeyState(VK_LBUTTON) & 0x8000) ? 0x0001 : 0 |
+        (GetKeyState(VK_RBUTTON) & 0x8000) ? 0x0002 : 0 |
+        (GetKeyState(VK_SHIFT) & 0x8000) ? 0x0004 : 0 |
+        (GetKeyState(VK_CONTROL) & 0x8000) ? 0x0008 : 0 |
+        (GetKeyState(VK_MBUTTON) & 0x8000) ? 0x0010 : 0 |
+        (GetKeyState(VK_XBUTTON1) & 0x8000) ? 0x0020 : 0 |
+        (GetKeyState(VK_XBUTTON2) & 0x8000) ? 0x0040 : 0;
+}
+LPARAM MakeMouseMoveLPARAM(int x, int y) {
+    return MAKELPARAM(x - clientLeft, y - clientTop);
 }
 
-DWORD WINAPI CameraFixThread(LPVOID lParam) {
-    HHOOK hook = SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(0), 0);
-    if (hook) {
-        MSG message;
-        while (GetMessage(&message, nullptr, 0, 0) > 0) {
-            TranslateMessage(&message);
-            DispatchMessage(&message);
-        }
-        UnhookWindowsHookEx(hook);
-        mouseHookInstalled = false;
+bool IsWindowedMode() {
+    return GetAionHwnd() && ((GetWindowLong(GetAionHwnd(), GWL_STYLE) & WS_CAPTION));
+}
+RAWINPUT* GetRawInput(HRAWINPUT ri) {
+
+    UINT dwSize;
+
+    GetRawInputData(ri, RID_INPUT, NULL, &dwSize,
+        sizeof(RAWINPUTHEADER));
+    LPBYTE lpb = new BYTE[dwSize];
+    if (lpb == NULL)
+    {
+        return 0;
     }
-    return 0;
+
+    if (GetRawInputData(ri, RID_INPUT, lpb, &dwSize,
+        sizeof(RAWINPUTHEADER)) != dwSize) {
+        //log("GetRawInputData does not return correct size !");
+    }
+
+    RAWINPUT* raw = (RAWINPUT*)lpb;
+    return raw;
 }
 
+LRESULT CALLBACK RawInputWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (IsWindowedMode()) {
+        switch (message) {
+        case WM_INPUT:
+        {
+            g_stepGetCursorPos = 0;
+
+            RAWINPUT* raw = GetRawInput((HRAWINPUT)lParam);
+            if (!raw)
+                return 0;
+
+            if (raw->header.dwType != RIM_TYPEMOUSE)
+                return 0;
+
+            int newX = rawX + raw->data.mouse.lLastX;
+            int newY = rawY + raw->data.mouse.lLastY;
+
+            rawX = newX;
+            rawY = newY;
+
+            if (g_isCursorHidden) {
+                CallWindowProc(g_realWndProc, hWnd, WM_MOUSEMOVE, MakeMouseMoveWPARAM(), MakeMouseMoveLPARAM(rawX, rawY));
+                g_stepPanning++;
+            }
+            else if (!g_isCursorHidden) {
+                ClipCursor(nullptr);
+                g_stepPanning = 0;
+            }
+            return 0;
+        }
+        case WM_LBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_XBUTTONDOWN:
+        {
+            g_isHandlingMouseDown = true;
+            LRESULT r = CallWindowProc(g_realWndProc, hWnd, message, wParam, lParam);
+            g_isHandlingMouseDown = false;
+            return r;
+        }
+        case WM_MOUSEMOVE:
+            if (g_isCursorHidden) {
+
+                // WM_MOUSEMOVE is generated by the WM_INPUT handler
+                return 0;
+            }
+        case WM_CLOSE:
+        case WM_DESTROY:
+        case WM_NCDESTROY:
+        case WM_KILLFOCUS:
+            ClipCursor(nullptr);
+            break;
+        }
+    }
+    else if (message == WM_INPUT) {
+        return 0;
+    }
+    return CallWindowProc(g_realWndProc, hWnd, message, wParam, lParam);
+}
+
+bool g_rawInputFixInstalled = false;
+
+void InstallRawInputFix() {
+    HWND hwnd = GetAionHwnd();
+    if (!hwnd)
+        return;
+
+    g_realWndProc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)RawInputWndProc);
+
+    RAWINPUTDEVICE Rid;
+    Rid.usUsagePage = 1;
+    Rid.usUsage = 2;
+    Rid.dwFlags = 0;
+    Rid.hwndTarget = hwnd;
+
+    RegisterRawInputDevices(&Rid, 1, sizeof(Rid));
+
+    g_rawInputFixInstalled = true;
+}
+static decltype(GetCursorPos)* real_GetCursorPos = GetCursorPos;
 static decltype(SetCursorPos)* real_SetCursorPos = SetCursorPos;
 BOOL WINAPI zzSetCursorPos(_In_ int X, _In_ int Y) {
-    BOOL result = real_SetCursorPos(X, Y);
-    if (!clientHwnd) {
-        clientHwnd = GetActiveWindow();
-    }
-    if (clientHwnd && IsCursorHidden()) {
-        if (IsWindowedMode()) {
-            if (!mouseHookInstalled) {
-                mouseHookInstalled = true;
-                // windowed mode needs decoupled processing, otherwise camera movements will stutter while any key on the keyboard is pressed
-                CreateThread(nullptr, 0, CameraFixThread, nullptr, 0, nullptr);
-            }
-        } else {
+    BOOL result = TRUE;
+
+    if (!IsWindowedMode())
+    {
+        result = real_SetCursorPos(X, Y);
+
+        if (GetActiveWindow() == clientHwnd) {
             POINT pt;
-            GetCursorPos(&pt);
+            real_GetCursorPos(&pt);
             ScreenToClient(clientHwnd, &pt);
-            PostMessage(clientHwnd, WM_MOUSEMOVE, MakeMouseMoveWParam(), MAKELPARAM(pt.x, pt.y));
+
+            PostMessage(clientHwnd, WM_MOUSEMOVE, MakeMouseMoveWPARAM(), MAKELPARAM(pt.x, pt.y));
+        }
+    }
+    else
+    {
+        if (!g_rawInputFixInstalled) {
+            InstallRawInputFix();
+        }
+
+        if (g_stepGetCursorPos == 0 && g_rawInputFixInstalled && g_isHandlingMouseDown) {
+            rawX = X;
+            rawY = Y;
         }
     }
     return result;
 }
+BOOL
+WINAPI
+zzGetCursorPos(
+    _Out_ LPPOINT lpPoint) {
+
+    if (IsWindowedMode())
+    {
+        g_stepGetCursorPos++;
+
+        if (g_stepGetCursorPos == 1 && g_stepPanning > 0 && g_rawInputFixInstalled && g_isCursorHidden) {
+            lpPoint->x = rawX;
+            lpPoint->y = rawY;
+            return TRUE;
+        }
+    }
+    return real_GetCursorPos(lpPoint);
+}
+static decltype(SetCursor)* real_SetCursor = SetCursor;
+HCURSOR
+WINAPI
+zzSetCursor(
+    _In_opt_ HCURSOR hCursor) {
+
+    if (IsWindowedMode()) {
+        bool wasHidden = g_isCursorHidden;
+
+        g_isCursorHidden = !hCursor;
+
+        if (g_rawInputFixInstalled) {
+            if (g_isCursorHidden && !wasHidden && GetFocus() == GetAionHwnd()) {
+                // lock the cursor pos while hidden
+                RECT rc;
+                real_GetCursorPos((LPPOINT)&rc);
+                rc.right = rc.left + 1;
+                rc.bottom = rc.top + 1;
+                ClipCursor(&rc);
+            }
+            else {
+                ClipCursor(nullptr);
+            }
+        }
+    }
+    return real_SetCursor(hCursor);
+}
+
 
 void EnableHighQualityGraphicsOptions() {
     MEMORY_BASIC_INFORMATION mbi = {};
@@ -197,6 +348,8 @@ void InstallPatch() {
     // activate camera movement fix for windows 10
     if (IsWindows10FallCreatorsUpdateOrLater()) {
         DetourAttach(&(PVOID&)real_SetCursorPos, zzSetCursorPos);
+        DetourAttach(&(PVOID&)real_GetCursorPos, zzGetCursorPos);
+        DetourAttach(&(PVOID&)real_SetCursor, zzSetCursor);
     }
 
     // enable disabled graphics settings on high resolutions
