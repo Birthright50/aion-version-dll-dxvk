@@ -11,8 +11,28 @@ Features:
 This project depends on [MS Detours](https://github.com/Microsoft/Detours). Since it's served via NuGet, you should be able to build the project straight away.
 
 ## Installation
-To install, copy each version.dll to the respective bin32 or bin64 folder under the Aion client root.
+1. Download latest [DXVK](https://github.com/doitsujin/dxvk) release.
+2. Copy `d3d9.dll` into respective bin32 or bin64 folder.
+3. Place `version.dll` (from this repository) into the same folder
+4. (Optional but recommended) create `dxvk.conf` in the **game root directory**
+> If you don't want to use DXVK, you can skip steps 1 and 2.
 
-If you want DXVK support, put [d3d9.dll](https://github.com/doitsujin/dxvk) to the respective bin32 or bin64 folder under the Aion client root.
+## ⚙️ Recommended DXVK Configuration
 
-Tested with the Aion 4.6 game client on Windows 11.
+Create a file named `dxvk.conf` in the **game root directory** (NOT `bin32/bin64`):
+
+```ini
+dxvk.hud = fps
+
+# Performance
+d3d9.cachedDynamicBuffers = true
+d3d9.deferSurfaceCreation = true
+
+# Quality
+d3d9.samplerAnisotropy = 16
+
+# Compatibility / shader fixes
+d3d9.forceSamplerTypeSpecConstants = true
+
+# Optional (only for legacy engines with broken VRAM detection)
+# d3d9.maxAvailableMemory = 4096
