@@ -31,8 +31,5 @@ d3d9.deferSurfaceCreation = true
 # Quality
 d3d9.samplerAnisotropy = 16
 
-# Compatibility / shader fixes
+# D3D9 sampler/shader compatibility fix
 d3d9.forceSamplerTypeSpecConstants = true
-
-# Optional (only for legacy engines with broken VRAM detection)
-# d3d9.maxAvailableMemory = 4096
